@@ -1,6 +1,6 @@
 # RK3588 validation
 
-Date: 2026-11-23
+Date: 2026-11-24
 
 ## Platform
 
@@ -9,7 +9,7 @@ Date: 2026-11-23
 - ONNX Runtime 1.19.2
 - Rust 1.100.0, release build
 - `192x384_it2_d96` model preset
-- Textured far-background Blender scene `scene_0000`
+- Original Fast-FoundationStereo `192x384_it2_d96` exported stereo pair
 
 The shipped CPU frequency limits were left enabled.
 
@@ -28,7 +28,10 @@ correlation volume differed only by floating-point accumulation order.
 |---|---:|---:|---:|
 | feature outputs, left/right | 0 | 0 | 1.0 |
 | GWC volume | 1.34e-8 | 1.19e-7 | 1.0 |
-| final disparity, Rust vs Python FFS | **3.30e-6 px** | **2.63e-4 px** | **0.9999999999998** |
+| final disparity, Rust vs Python FFS | **8.34e-6 px** | **2.40e-4 px** | **0.9999999999992** |
+
+On pixels visible in both cameras, Rust versus the original FP32 export has MAE
+`0.00772 px` and P99 `0.0451 px`.
 
 ## Synchronous throughput
 

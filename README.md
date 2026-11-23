@@ -34,9 +34,18 @@ under the board's shipped CPU limit through cross-frame overlap. The current Rus
 API is synchronous and measured **1423.7 ms/frame**; a threaded streaming
 scheduler is the next milestone.
 
-Validation against the Python pipeline on the same textured far-background
-scene produced difference MAE `3.30e-6 px`, P99 `1.72e-5 px`, max
-`2.63e-4 px`, and correlation `0.9999999999998`.
+Validation against the Python segmented pipeline on an original exported stereo
+pair produced difference MAE `8.34e-6 px`, P99 `3.05e-5 px`, max
+`2.40e-4 px`, and correlation `0.9999999999992`.
+
+## Result comparison
+
+![Original Fast-FoundationStereo input: original FP32 pipeline vs Rust RK3588](assets/readme_comparison.png)
+
+This uses a real stereo pair exported by the original Fast-FoundationStereo
+pipeline, not a Blender-generated scene. The difference view is restricted to
+pixels visible in both cameras. Against the original FP32 result, Rust has
+overlap MAE `0.00772 px` and P99 `0.0451 px` at `192x384`.
 
 ## Build
 
