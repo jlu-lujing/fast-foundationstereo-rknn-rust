@@ -1,0 +1,11 @@
+foundationstereo-rknn
+Copyright (c) 2026 Lu Jing and contributors
+
+This repository contains a vendored group-wise correlation kernel derived from
+the author's fast-foundationstereo-rknn project and is distributed under the MIT
+license in this repository.
+
+Fast-FoundationStereo and its model weights are NVIDIA research software and
+remain subject to their upstream license terms. No model weights or RKNN model
+artifacts are included here.
+
