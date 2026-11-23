@@ -1,5 +1,8 @@
 # foundationstereo-rknn
 
+[![CI](https://github.com/jlu-lujing/fast-foundationstereo-rknn-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/jlu-lujing/fast-foundationstereo-rknn-rust/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Rust inference library for [Fast-FoundationStereo](https://github.com/NVlabs/Fast-FoundationStereo)
 on Rockchip RK3588.
 
