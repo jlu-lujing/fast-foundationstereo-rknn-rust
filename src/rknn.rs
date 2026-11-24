@@ -18,6 +18,7 @@ const RKNN_QUERY_IN_OUT_NUM: u32 = 0;
 const RKNN_QUERY_INPUT_ATTR: u32 = 1;
 const RKNN_QUERY_OUTPUT_ATTR: u32 = 2;
 const RKNN_TENSOR_FLOAT32: u32 = 0;
+const RKNN_TENSOR_FLOAT16: u32 = 1;
 const RKNN_TENSOR_NHWC: u32 = 1;
 const RKNN_MAX_DIMS: usize = 16;
 const RKNN_MAX_NAME_LEN: usize = 256;
@@ -108,7 +109,7 @@ impl NpuCore {
             Self::Core1 => 2,
             Self::Core2 => 4,
             Self::Core01 => 3,
-            Self::All => 0xffff,
+            Self::All => 0x7,
         }
     }
 }
@@ -221,6 +222,7 @@ pub struct RknnModel {
     library: Arc<RknnLibrary>,
     _model_data: Vec<u8>,
     input_info: Vec<TensorInfo>,
+    input_attrs: Vec<RknnTensorAttr>,
     output_info: Vec<TensorInfo>,
     output_attrs: Vec<RknnTensorAttr>,
 }
@@ -266,9 +268,11 @@ impl RknnModel {
 
         let io_num = query_io_num(&library.functions, context)?;
         let mut input_info = Vec::with_capacity(io_num.n_input as usize);
+        let mut input_attrs = Vec::with_capacity(io_num.n_input as usize);
         for index in 0..io_num.n_input {
             let attr = query_attr(&library.functions, context, RKNN_QUERY_INPUT_ATTR, index)?;
             input_info.push(info_from_attr(&attr));
+            input_attrs.push(attr);
         }
         let mut output_info = Vec::with_capacity(io_num.n_output as usize);
         let mut output_attrs = Vec::with_capacity(io_num.n_output as usize);
@@ -282,6 +286,7 @@ impl RknnModel {
             library,
             _model_data: model_data,
             input_info,
+            input_attrs,
             output_info,
             output_attrs,
         })
@@ -315,6 +320,47 @@ impl RknnModel {
                 format: RKNN_TENSOR_NHWC,
             });
         }
+        self.execute(raw_inputs)
+    }
+
+    /// Run a model whose two or more NHWC inputs are already FP16 and use
+    /// pass-through mode. This is the zero-conversion path expected by the
+    /// single-graph Fast-FoundationStereo models exported for RK3588.
+    pub fn run_nhwc_f16(&mut self, inputs: &[&[u16]]) -> Result<Vec<Tensor>> {
+        if inputs.len() != self.input_attrs.len() {
+            return Err(Error::InputCount {
+                expected: self.input_attrs.len(),
+                actual: inputs.len(),
+            });
+        }
+        let mut raw_inputs = Vec::with_capacity(inputs.len());
+        for (index, (buffer, attr)) in inputs.iter().zip(&self.input_attrs).enumerate() {
+            if attr.data_type != RKNN_TENSOR_FLOAT16 || attr.format != RKNN_TENSOR_NHWC {
+                return Err(Error::UnexpectedLayout(format!(
+                    "input {index} must be FP16 NHWC, got type={} format={}",
+                    attr.data_type, attr.format
+                )));
+            }
+            if buffer.len() != attr.n_elems as usize {
+                return Err(Error::InvalidTensor(format!(
+                    "input {index} has {} FP16 values, expected {}",
+                    buffer.len(),
+                    attr.n_elems
+                )));
+            }
+            raw_inputs.push(RknnInput {
+                index: index as u32,
+                buf: buffer.as_ptr().cast_mut().cast(),
+                size: std::mem::size_of_val(*buffer) as u32,
+                pass_through: 1,
+                type_: RKNN_TENSOR_FLOAT16,
+                format: RKNN_TENSOR_NHWC,
+            });
+        }
+        self.execute(raw_inputs)
+    }
+
+    fn execute(&mut self, mut raw_inputs: Vec<RknnInput>) -> Result<Vec<Tensor>> {
         let code = unsafe {
             (self.library.functions.inputs_set)(
                 self.context,

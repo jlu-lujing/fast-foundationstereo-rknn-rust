@@ -17,6 +17,7 @@ ort = ["dep:ort"]
 serde = ["dep:serde"]
 
 [dependencies]
+half = "2"
 libloading = "0.9"
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-19"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -32,4 +33,16 @@ cc = "1"
 
 [package.metadata.docs.rs]
 features = ["ort", "serde"]
+
+[[example]]
+name = "bench_pair"
+required-features = ["ort"]
+
+[[example]]
+name = "dump_stages"
+required-features = ["ort"]
+
+[[example]]
+name = "run_pair"
+required-features = ["ort"]
 
