@@ -19,9 +19,12 @@ kernels, or per-stage RKNN launches.
 - `RknnOptions::default()` selects `NpuCore::All` and resolves the runtime from
   `RKNN_LIBRARY`, `/usr/lib/librknnrt.so`, then the system loader.
 - Inputs use RKNN pass-through mode, so RKNN does not convert FP32 to FP16 again.
-- `infer` accepts prepared `F16Image` values and avoids per-frame allocation.
-- `infer_rgb8` and `infer_nchw` reuse internal buffers and repack only the two
-  camera planes.
+- `infer` accepts prepared `F16Image` values and avoids input conversion.
+- `infer_into` and its RGB8/NCHW variants write into a caller-owned output buffer,
+  avoiding RKNN output allocation and a second FP32 copy.
+- `infer_rgb8` and `infer_nchw` lazily allocate reusable internal buffers and
+  repack only the two camera planes. RGB8 values use a 256-entry FP16 lookup
+  table rather than per-byte float conversion.
 - The RKNN model bytes and runtime library remain alive for the context lifetime,
   as required by the RKNN C API.
 
@@ -46,6 +49,11 @@ Full-hardware configuration on NanoPC-T6-LTS:
 
 The table reports the median of three independent run medians, each using 10
 warmups and 50 measured frames.
+
+The optimized output-reuse paths were also checked in three 30-frame A/B runs.
+Their gain is small relative to NPU and thermal run-to-run variation, but they
+remove a 288 KiB output allocation/copy per frame and reduce RGB8 conversion
+work. The NPU graph remains the dominant cost.
 
 ## Further speed work
 

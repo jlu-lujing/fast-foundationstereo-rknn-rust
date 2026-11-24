@@ -266,29 +266,23 @@ impl RknnModel {
             });
         }
 
-        let io_num = query_io_num(&library.functions, context)?;
-        let mut input_info = Vec::with_capacity(io_num.n_input as usize);
-        let mut input_attrs = Vec::with_capacity(io_num.n_input as usize);
-        for index in 0..io_num.n_input {
-            let attr = query_attr(&library.functions, context, RKNN_QUERY_INPUT_ATTR, index)?;
-            input_info.push(info_from_attr(&attr));
-            input_attrs.push(attr);
-        }
-        let mut output_info = Vec::with_capacity(io_num.n_output as usize);
-        let mut output_attrs = Vec::with_capacity(io_num.n_output as usize);
-        for index in 0..io_num.n_output {
-            let attr = query_attr(&library.functions, context, RKNN_QUERY_OUTPUT_ATTR, index)?;
-            output_info.push(info_from_attr(&attr));
-            output_attrs.push(attr);
-        }
+        let io = match query_model_io(&library.functions, context) {
+            Ok(value) => value,
+            Err(error) => {
+                unsafe {
+                    (library.functions.destroy)(context);
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
             context,
             library,
             _model_data: model_data,
-            input_info,
-            input_attrs,
-            output_info,
-            output_attrs,
+            input_info: io.input_info,
+            input_attrs: io.input_attrs,
+            output_info: io.output_info,
+            output_attrs: io.output_attrs,
         })
     }
 
@@ -305,6 +299,71 @@ impl RknnModel {
     /// Pass-through mode avoids RKNN doing a second FP32-to-FP16 conversion for
     /// every frame.
     pub fn run_nhwc_f16(&mut self, inputs: &[&[u16]]) -> Result<Vec<Tensor>> {
+        let mut raw_inputs = self.prepare_nhwc_f16_inputs(inputs)?;
+        self.run_inputs(&mut raw_inputs)?;
+        self.collect_outputs()
+    }
+
+    /// Run FP16 NHWC inputs into a caller-owned single FP32 output buffer.
+    ///
+    /// This uses RKNN's preallocated-output mode and avoids the runtime output
+    /// allocation and a second copy into a `Tensor` on every frame.
+    pub fn run_nhwc_f16_into(&mut self, inputs: &[&[u16]], output: &mut [f32]) -> Result<()> {
+        if self.output_attrs.len() != 1 {
+            return Err(Error::UnexpectedLayout(format!(
+                "preallocated output requires one model output, got {}",
+                self.output_attrs.len()
+            )));
+        }
+        let attr = &self.output_attrs[0];
+        let expected = attr.n_elems as usize;
+        if output.len() != expected {
+            return Err(Error::InvalidTensor(format!(
+                "output has {} values, expected {expected}",
+                output.len()
+            )));
+        }
+        let mut raw_inputs = self.prepare_nhwc_f16_inputs(inputs)?;
+        self.run_inputs(&mut raw_inputs)?;
+
+        let mut raw_outputs = [RknnOutput {
+            want_float: 1,
+            is_prealloc: 1,
+            index: 0,
+            buf: output.as_mut_ptr().cast(),
+            size: std::mem::size_of_val(output) as u32,
+        }];
+        let code = unsafe {
+            (self.library.functions.outputs_get)(
+                self.context,
+                raw_outputs.len() as u32,
+                raw_outputs.as_mut_ptr(),
+                ptr::null(),
+            )
+        };
+        check_call(code, "outputs_get")?;
+
+        let output_result =
+            if raw_outputs[0].buf.is_null() || raw_outputs[0].size != expected as u32 * 4 {
+                Err(Error::UnexpectedLayout(format!(
+                    "preallocated output returned buf={:p}, size={}",
+                    raw_outputs[0].buf, raw_outputs[0].size
+                )))
+            } else {
+                Ok(())
+            };
+        let code = unsafe {
+            (self.library.functions.outputs_release)(
+                self.context,
+                raw_outputs.len() as u32,
+                raw_outputs.as_mut_ptr(),
+            )
+        };
+        output_result?;
+        check_call(code, "outputs_release")
+    }
+
+    fn prepare_nhwc_f16_inputs(&self, inputs: &[&[u16]]) -> Result<Vec<RknnInput>> {
         if inputs.len() != self.input_attrs.len() {
             return Err(Error::InputCount {
                 expected: self.input_attrs.len(),
@@ -335,10 +394,10 @@ impl RknnModel {
                 format: RKNN_TENSOR_NHWC,
             });
         }
-        self.execute(raw_inputs)
+        Ok(raw_inputs)
     }
 
-    fn execute(&mut self, mut raw_inputs: Vec<RknnInput>) -> Result<Vec<Tensor>> {
+    fn run_inputs(&mut self, raw_inputs: &mut [RknnInput]) -> Result<()> {
         let code = unsafe {
             (self.library.functions.inputs_set)(
                 self.context,
@@ -348,8 +407,10 @@ impl RknnModel {
         };
         check_call(code, "inputs_set")?;
         let code = unsafe { (self.library.functions.run)(self.context, ptr::null()) };
-        check_call(code, "run")?;
+        check_call(code, "run")
+    }
 
+    fn collect_outputs(&mut self) -> Result<Vec<Tensor>> {
         let mut raw_outputs = self
             .output_attrs
             .iter()
@@ -372,27 +433,30 @@ impl RknnModel {
         };
         check_call(code, "outputs_get")?;
 
-        let mut outputs = Vec::with_capacity(raw_outputs.len());
-        for (index, output) in raw_outputs.iter().enumerate() {
-            let attr = &self.output_attrs[index];
-            let shape = attr.dims[..attr.n_dims as usize]
-                .iter()
-                .map(|value| *value as usize)
-                .collect::<Vec<_>>();
-            let count = shape.iter().product::<usize>();
-            let data = if output.buf.is_null() || count == 0 {
-                return Err(Error::UnexpectedLayout(format!(
-                    "output {index} returned a null or empty buffer"
-                )));
-            } else {
-                unsafe { std::slice::from_raw_parts(output.buf.cast::<f32>(), count) }.to_vec()
-            };
-            outputs.push(Tensor::named(
-                Some(attr.name_str().to_string()),
-                shape,
-                data,
-            )?);
-        }
+        let output_result = (|| {
+            let mut outputs = Vec::with_capacity(raw_outputs.len());
+            for (index, output) in raw_outputs.iter().enumerate() {
+                let attr = &self.output_attrs[index];
+                let shape = attr.dims[..attr.n_dims as usize]
+                    .iter()
+                    .map(|value| *value as usize)
+                    .collect::<Vec<_>>();
+                let count = shape.iter().product::<usize>();
+                let data = if output.buf.is_null() || count == 0 {
+                    return Err(Error::UnexpectedLayout(format!(
+                        "output {index} returned a null or empty buffer"
+                    )));
+                } else {
+                    unsafe { std::slice::from_raw_parts(output.buf.cast::<f32>(), count) }.to_vec()
+                };
+                outputs.push(Tensor::named(
+                    Some(attr.name_str().to_string()),
+                    shape,
+                    data,
+                )?);
+            }
+            Ok(outputs)
+        })();
         let code = unsafe {
             (self.library.functions.outputs_release)(
                 self.context,
@@ -400,6 +464,7 @@ impl RknnModel {
                 raw_outputs.as_mut_ptr(),
             )
         };
+        let outputs = output_result?;
         check_call(code, "outputs_release")?;
         Ok(outputs)
     }
@@ -428,6 +493,37 @@ fn query_io_num(functions: &RknnFunctions, context: RknnContext) -> Result<RknnI
     };
     check_call(code, "query_in_out_num")?;
     Ok(value)
+}
+
+struct ModelIo {
+    input_info: Vec<TensorInfo>,
+    input_attrs: Vec<RknnTensorAttr>,
+    output_info: Vec<TensorInfo>,
+    output_attrs: Vec<RknnTensorAttr>,
+}
+
+fn query_model_io(functions: &RknnFunctions, context: RknnContext) -> Result<ModelIo> {
+    let io_num = query_io_num(functions, context)?;
+    let mut input_info = Vec::with_capacity(io_num.n_input as usize);
+    let mut input_attrs = Vec::with_capacity(io_num.n_input as usize);
+    for index in 0..io_num.n_input {
+        let attr = query_attr(functions, context, RKNN_QUERY_INPUT_ATTR, index)?;
+        input_info.push(info_from_attr(&attr));
+        input_attrs.push(attr);
+    }
+    let mut output_info = Vec::with_capacity(io_num.n_output as usize);
+    let mut output_attrs = Vec::with_capacity(io_num.n_output as usize);
+    for index in 0..io_num.n_output {
+        let attr = query_attr(functions, context, RKNN_QUERY_OUTPUT_ATTR, index)?;
+        output_info.push(info_from_attr(&attr));
+        output_attrs.push(attr);
+    }
+    Ok(ModelIo {
+        input_info,
+        input_attrs,
+        output_info,
+        output_attrs,
+    })
 }
 
 fn query_attr(

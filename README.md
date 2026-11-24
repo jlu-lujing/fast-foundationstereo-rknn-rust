@@ -93,6 +93,7 @@ not support the model's custom operator.
 cargo run --release --example bench_stereo -- \
   --model /path/to/stereo_192x384_it2_d96.rknn \
   --rknn-lib /path/to/librknnrt.so \
+  --core 7 \
   --left left.png \
   --right right.png \
   --warmup 5 \
@@ -133,12 +134,18 @@ let (width, height) = stereo.input_size();
 // `left_rgb8` and `right_rgb8` are contiguous HWC RGB bytes at model size.
 let disparity = stereo.infer_rgb8(&left_rgb8, &right_rgb8)?;
 assert_eq!(disparity.shape, vec![1, 1, height, width]);
+
+// Reuse one output buffer to avoid per-frame allocation and copying.
+let mut reused = vec![0.0; stereo.output_len()];
+stereo.infer_rgb8_into(&left_rgb8, &right_rgb8, &mut reused)?;
 # Ok::<(), foundationstereo_rknn::Error>(())
 ```
 
 For zero per-frame packing overhead, keep two `F16Image` buffers and call
 `infer(&left, &right)`. `infer_nchw` is available for callers whose camera
-pipeline already produces `[1,3,H,W]` float tensors.
+pipeline already produces `[1,3,H,W]` float tensors. `infer_into`,
+`infer_nchw_into`, and `infer_rgb8_into` accept a caller-owned FP32 output slice
+and use RKNN preallocated-output mode.
 
 ## Model contract
 

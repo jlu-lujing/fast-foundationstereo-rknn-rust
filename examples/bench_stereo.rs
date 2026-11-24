@@ -4,13 +4,17 @@ use std::{
     time::Instant,
 };
 
-use foundationstereo_rknn::{F16Image, FoundationStereo, RknnOptions, Tensor};
+use foundationstereo_rknn::{F16Image, FoundationStereo, NpuCore, RknnOptions, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
     let options = RknnOptions {
         library_path: args.get("rknn-lib").map(PathBuf::from),
-        ..RknnOptions::default()
+        core: args
+            .get("core")
+            .map(|value| parse_core(value))
+            .transpose()?
+            .unwrap_or(NpuCore::All),
     };
     let mut stereo = FoundationStereo::load_with_options(required(&args, "model")?, options)?;
     let (width, height) = stereo.input_size();
@@ -24,24 +28,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("--frames must be positive".into());
     }
 
-    let model = measure(frames, warmup, || {
+    let model = measure_tensor(frames, warmup, || {
         stereo.infer(&prepared_left, &prepared_right)
     })?;
-    let rgb8 = measure(frames, warmup, || stereo.infer_rgb8(&left, &right))?;
-    println!("size={width}x{height} frames={frames} model={model} rgb8={rgb8}");
+    let mut reused_output = vec![0.0; stereo.output_len()];
+    let model_into = measure_into(frames, warmup, &mut reused_output, |output| {
+        stereo.infer_into(&prepared_left, &prepared_right, output)
+    })?;
+    let rgb8 = measure_tensor(frames, warmup, || stereo.infer_rgb8(&left, &right))?;
+    let rgb8_into = measure_into(frames, warmup, &mut reused_output, |output| {
+        stereo.infer_rgb8_into(&left, &right, output)
+    })?;
+    println!(
+        "size={width}x{height} frames={frames} model={model} model_into={model_into} \
+         rgb8={rgb8} rgb8_into={rgb8_into}"
+    );
 
     if let Some(path) = args.get("output") {
         let disparity = stereo.infer_rgb8(&left, &right)?;
+        let mut reused = vec![0.0; stereo.output_len()];
+        stereo.infer_rgb8_into(&left, &right, &mut reused)?;
+        if disparity.data != reused {
+            return Err("preallocated and owned output paths disagree".into());
+        }
         write_f32(&disparity, Path::new(path))?;
-        println!("wrote {path}");
+        println!("wrote {path} (owned and preallocated outputs match)");
     }
     Ok(())
 }
 
-fn measure(
+fn measure_tensor(
     frames: usize,
     warmup: usize,
     mut infer: impl FnMut() -> foundationstereo_rknn::Result<Tensor>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    measure_unit(frames, warmup, || infer().map(drop))
+}
+
+fn measure_into(
+    frames: usize,
+    warmup: usize,
+    output: &mut [f32],
+    mut infer: impl FnMut(&mut [f32]) -> foundationstereo_rknn::Result<()>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    measure_unit(frames, warmup, || infer(output))
+}
+
+fn measure_unit(
+    frames: usize,
+    warmup: usize,
+    mut infer: impl FnMut() -> foundationstereo_rknn::Result<()>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     for _ in 0..warmup {
         infer()?;
@@ -59,6 +95,18 @@ fn measure(
         "median={median:.3}ms p95={p95:.3}ms fps={:.3}",
         1000.0 / median
     ))
+}
+
+fn parse_core(value: &str) -> Result<NpuCore, Box<dyn std::error::Error>> {
+    match value {
+        "auto" => Ok(NpuCore::Auto),
+        "0" => Ok(NpuCore::Core0),
+        "1" => Ok(NpuCore::Core1),
+        "2" => Ok(NpuCore::Core2),
+        "01" => Ok(NpuCore::Core01),
+        "7" | "all" => Ok(NpuCore::All),
+        _ => Err(format!("invalid --core {value:?}; expected auto, 0, 1, 2, 01, or 7").into()),
+    }
 }
 
 fn parse_usize(

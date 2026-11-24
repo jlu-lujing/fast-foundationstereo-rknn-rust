@@ -1,6 +1,6 @@
 //! Whole-network Fast-FoundationStereo inference in one RKNN graph.
 
-use std::path::Path;
+use std::{path::Path, sync::OnceLock};
 
 use half::f16;
 
@@ -80,8 +80,9 @@ impl F16Image {
                 self.height
             )));
         }
+        let table = rgb8_to_f16_table();
         for (destination, value) in self.data.iter_mut().zip(rgb) {
-            *destination = f16::from_f32(*value as f32).to_bits();
+            *destination = table[*value as usize];
         }
         Ok(())
     }
@@ -128,8 +129,8 @@ pub struct FoundationStereo {
     model: RknnModel,
     height: usize,
     width: usize,
-    left_buffer: F16Image,
-    right_buffer: F16Image,
+    left_buffer: Option<F16Image>,
+    right_buffer: Option<F16Image>,
 }
 
 impl FoundationStereo {
@@ -166,14 +167,19 @@ impl FoundationStereo {
             model,
             height: *height,
             width: *width,
-            left_buffer: F16Image::zeroed(*height, *width)?,
-            right_buffer: F16Image::zeroed(*height, *width)?,
+            left_buffer: None,
+            right_buffer: None,
         })
     }
 
     /// Return model input dimensions as `(width, height)`.
     pub fn input_size(&self) -> (usize, usize) {
         (self.width, self.height)
+    }
+
+    /// Number of FP32 values in one disparity output.
+    pub fn output_len(&self) -> usize {
+        self.height * self.width
     }
 
     /// Run prepared FP16 NHWC inputs without allocating a per-frame conversion.
@@ -184,24 +190,94 @@ impl FoundationStereo {
         reshape_disparity(outputs.remove(0), self.height, self.width)
     }
 
+    /// Run prepared FP16 inputs into a caller-owned disparity buffer.
+    ///
+    /// The buffer must contain exactly [`Self::output_len`] FP32 values. Reuse
+    /// the buffer across frames to avoid output allocation and copying.
+    pub fn infer_into(
+        &mut self,
+        left: &F16Image,
+        right: &F16Image,
+        output: &mut [f32],
+    ) -> Result<()> {
+        self.validate_image(left, "left")?;
+        self.validate_image(right, "right")?;
+        self.validate_output(output)?;
+        self.model
+            .run_nhwc_f16_into(&[&left.data, &right.data], output)
+    }
+
     /// Pack two RGB `[1,3,H,W]` tensors and run inference.
     pub fn infer_nchw(&mut self, left: &Tensor, right: &Tensor) -> Result<Tensor> {
-        self.left_buffer.copy_from_nchw(left)?;
-        self.right_buffer.copy_from_nchw(right)?;
-        let mut outputs = self
-            .model
-            .run_nhwc_f16(&[&self.left_buffer.data, &self.right_buffer.data])?;
+        self.ensure_buffers()?;
+        if let Some(buffer) = self.left_buffer.as_mut() {
+            buffer.copy_from_nchw(left)?;
+        }
+        if let Some(buffer) = self.right_buffer.as_mut() {
+            buffer.copy_from_nchw(right)?;
+        }
+        let (left, right) = input_buffers(&self.left_buffer, &self.right_buffer)?;
+        let mut outputs = self.model.run_nhwc_f16(&[&left.data, &right.data])?;
         reshape_disparity(outputs.remove(0), self.height, self.width)
+    }
+
+    /// Pack two NCHW tensors and run inference into a caller-owned buffer.
+    pub fn infer_nchw_into(
+        &mut self,
+        left: &Tensor,
+        right: &Tensor,
+        output: &mut [f32],
+    ) -> Result<()> {
+        self.validate_output(output)?;
+        self.ensure_buffers()?;
+        if let Some(buffer) = self.left_buffer.as_mut() {
+            buffer.copy_from_nchw(left)?;
+        }
+        if let Some(buffer) = self.right_buffer.as_mut() {
+            buffer.copy_from_nchw(right)?;
+        }
+        let (left, right) = input_buffers(&self.left_buffer, &self.right_buffer)?;
+        self.model
+            .run_nhwc_f16_into(&[&left.data, &right.data], output)
     }
 
     /// Pack two HWC RGB8 images and run inference.
     pub fn infer_rgb8(&mut self, left: &[u8], right: &[u8]) -> Result<Tensor> {
-        self.left_buffer.copy_from_rgb8(left)?;
-        self.right_buffer.copy_from_rgb8(right)?;
-        let mut outputs = self
-            .model
-            .run_nhwc_f16(&[&self.left_buffer.data, &self.right_buffer.data])?;
+        self.ensure_buffers()?;
+        if let Some(buffer) = self.left_buffer.as_mut() {
+            buffer.copy_from_rgb8(left)?;
+        }
+        if let Some(buffer) = self.right_buffer.as_mut() {
+            buffer.copy_from_rgb8(right)?;
+        }
+        let (left, right) = input_buffers(&self.left_buffer, &self.right_buffer)?;
+        let mut outputs = self.model.run_nhwc_f16(&[&left.data, &right.data])?;
         reshape_disparity(outputs.remove(0), self.height, self.width)
+    }
+
+    /// Pack two RGB8 images and run inference into a caller-owned buffer.
+    pub fn infer_rgb8_into(&mut self, left: &[u8], right: &[u8], output: &mut [f32]) -> Result<()> {
+        self.validate_output(output)?;
+        self.ensure_buffers()?;
+        if let Some(buffer) = self.left_buffer.as_mut() {
+            buffer.copy_from_rgb8(left)?;
+        }
+        if let Some(buffer) = self.right_buffer.as_mut() {
+            buffer.copy_from_rgb8(right)?;
+        }
+        let (left, right) = input_buffers(&self.left_buffer, &self.right_buffer)?;
+        self.model
+            .run_nhwc_f16_into(&[&left.data, &right.data], output)
+    }
+
+    fn ensure_buffers(&mut self) -> Result<()> {
+        if self.left_buffer.is_none() {
+            self.left_buffer = Some(F16Image::zeroed(self.height, self.width)?);
+        }
+        if self.right_buffer.is_none() {
+            self.right_buffer = Some(F16Image::zeroed(self.height, self.width)?);
+        }
+        Ok(())
     }
 
     fn validate_image(&self, image: &F16Image, label: &str) -> Result<()> {
@@ -212,6 +288,34 @@ impl FoundationStereo {
             )));
         }
         Ok(())
+    }
+
+    fn validate_output(&self, output: &[f32]) -> Result<()> {
+        let expected = self.output_len();
+        if output.len() != expected {
+            return Err(Error::InvalidTensor(format!(
+                "output has {} values, expected {expected}",
+                output.len()
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn rgb8_to_f16_table() -> &'static [u16; 256] {
+    static TABLE: OnceLock<[u16; 256]> = OnceLock::new();
+    TABLE.get_or_init(|| std::array::from_fn(|value| f16::from_f32(value as f32).to_bits()))
+}
+
+fn input_buffers<'a>(
+    left: &'a Option<F16Image>,
+    right: &'a Option<F16Image>,
+) -> Result<(&'a F16Image, &'a F16Image)> {
+    match (left, right) {
+        (Some(left), Some(right)) => Ok((left, right)),
+        _ => Err(Error::UnexpectedLayout(
+            "internal FP16 input buffers were not initialized".into(),
+        )),
     }
 }
 
@@ -245,5 +349,13 @@ mod tests {
 
         let error = F16Image::from_rgb8(1, 2, &[0, 1]).unwrap_err();
         assert!(matches!(error, Error::InvalidTensor(_)));
+    }
+
+    #[test]
+    fn rgb8_lookup_table_matches_direct_conversion() {
+        let table = rgb8_to_f16_table();
+        for value in 0..=u8::MAX {
+            assert_eq!(table[value as usize], f16::from_f32(value as f32).to_bits());
+        }
     }
 }
