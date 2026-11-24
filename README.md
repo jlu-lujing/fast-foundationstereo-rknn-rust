@@ -25,25 +25,29 @@ Measured on a NanoPC-T6-LTS / RK3588 using all hardware CPU and NPU frequencies:
 | Real pair 1 | **206.489 ms** | 200.288-211.345 ms | 212.323 ms | **4.843** | **208.950 ms** | 202.323-211.212 ms |
 | Real pair 2 | **209.160 ms** | 206.955-212.328 ms | 212.737 ms | **4.781** | **212.607 ms** | 202.159-213.379 ms |
 
-The table reports the median of three independent run medians. The Rust and C++
-frontends produce byte-identical outputs. The model call dominates runtime; input
-setup and output collection are below 0.5 ms when inputs are already packed as
-FP16 NHWC.
+The table reports the median of three independent run medians. The model call
+dominates runtime; input setup and output collection are below 0.5 ms when inputs
+are already packed as FP16 NHWC.
 
 For sustained low-power operation, the test board can apply an 80% CPU-frequency
 cap at boot. That cap must be removed before comparing these numbers. The
 measurements above use the hardware maximum OPPs, not that power-limited mode.
 
-## Result comparison
+## Comparison with NVIDIA upstream
 
 ![Real rectified left image and RK3588 disparity](assets/readme_comparison.png)
 
-This uses an original rectified stereo pair and the current single-graph RK3588
-output. Accuracy is evaluated only on pixels visible in both cameras.
+This uses an input from the NVIDIA project and compares the current RK3588 output
+with the original NVIDIA FP32 result. Metrics are evaluated only on pixels
+visible in both cameras.
 
-Against the device SGBM reference, disparity MAE is `0.582 px` and `1.637 px` on
-the two real validation pairs, with depth MAE `0.313 mm` and `0.694 mm`. SGBM is
-an independent reference, not ground truth.
+| Comparison with NVIDIA FP32 | Pixels | MAE | P95 | P99 | Correlation |
+|---|---:|---:|---:|---:|---:|
+| Same `192x384 it2 d96` input | 64,774 | **0.142 px** | **0.414 px** | 0.895 px | **0.99918** |
+
+The original NVIDIA result used the exported FP32 reference from
+`192x384_it2_d96/io/disp_fp32_ref.npy`. The RKNN output uses the same input and
+fixed model parameters.
 
 The Rust API was also rerun on 32 Blender pairs with rendered disparity truth:
 

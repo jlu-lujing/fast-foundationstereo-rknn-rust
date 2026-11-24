@@ -45,8 +45,7 @@ Full-hardware configuration on NanoPC-T6-LTS:
 | Pair 2 | 209.160 ms | 206.955-212.328 ms | 212.737 ms | 4.781 | 212.607 ms |
 
 The table reports the median of three independent run medians, each using 10
-warmups and 50 measured frames. Rust and matching C++ outputs are byte-identical,
-confirming that the Rust wrapper is not adding a material inference cost.
+warmups and 50 measured frames.
 
 ## Further speed work
 

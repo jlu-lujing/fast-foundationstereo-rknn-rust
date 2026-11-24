@@ -75,43 +75,69 @@ def panel(image: Image.Image, title: str, subtitle: str) -> Image.Image:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--left", type=Path, required=True)
-    parser.add_argument("--disparity", type=Path, required=True)
+    parser.add_argument("--inputs", type=Path, required=True)
+    parser.add_argument("--reference", type=Path, required=True)
+    parser.add_argument("--prediction", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--height", type=int, required=True)
     parser.add_argument("--width", type=int, required=True)
     args = parser.parse_args()
 
-    left = Image.open(args.left).convert("RGB")
-    disparity = np.fromfile(args.disparity, dtype="<f4")
-    if disparity.size != args.height * args.width:
-        raise ValueError(
-            f"expected {args.height * args.width} disparity values, got {disparity.size}"
+    with np.load(args.inputs) as values:
+        left = Image.fromarray(
+            np.clip(values["left"][0].transpose(1, 2, 0), 0, 255).astype(np.uint8),
+            mode="RGB",
         )
-    disparity = disparity.reshape(args.height, args.width)
-    visible = overlap_mask(disparity)
-    low, high = np.percentile(disparity[visible], [2, 98])
-    normalized = (disparity - low) / max(float(high - low), 1e-6)
-    color = gradient(normalized).astype(np.uint8)
-    color[~visible] = 0
-    color_image = Image.fromarray(color, mode="RGB")
+    reference = np.load(args.reference).astype(np.float32).squeeze()
+    prediction = np.fromfile(args.prediction, dtype="<f4")
+    if prediction.size != args.height * args.width:
+        raise ValueError(
+            f"expected {args.height * args.width} disparity values, got {prediction.size}"
+        )
+    prediction = prediction.reshape(args.height, args.width)
+    if reference.shape != prediction.shape:
+        raise ValueError(f"reference shape {reference.shape} != prediction {prediction.shape}")
+    visible = overlap_mask(reference)
+    valid = visible & np.isfinite(reference) & np.isfinite(prediction)
+    error = np.abs(prediction - reference)
+    low, high = np.percentile(reference[valid], [2, 98])
 
-    left_array = np.asarray(left.resize(color_image.size, Image.Resampling.LANCZOS), dtype=np.float32)
-    overlay = left_array.copy()
-    overlay[visible] = left_array[visible] * 0.38 + color[visible].astype(np.float32) * 0.62
-    overlay_image = Image.fromarray(np.clip(overlay, 0, 255).astype(np.uint8), mode="RGB")
+    def disparity_image(disparity: np.ndarray) -> Image.Image:
+        normalized = (disparity - low) / max(float(high - low), 1e-6)
+        color = gradient(normalized).astype(np.uint8)
+        color[~visible] = 0
+        return Image.fromarray(color, mode="RGB")
+
+    error_color = gradient(np.clip(error / 2.0, 0.0, 1.0)).astype(np.uint8)
+    error_color[~valid] = 0
 
     panels = [
-        panel(left, "Rectified left", "original camera image"),
-        panel(color_image, "RK3588 disparity", f"single RKNN graph · {visible.sum():,} overlap px"),
-        panel(overlay_image, "Depth overlay", "only binocular-overlap pixels shown"),
+        panel(left, "NVIDIA project input", "original rectified left image"),
+        panel(disparity_image(reference), "NVIDIA FP32", "original project reference"),
+        panel(disparity_image(prediction), "RK3588 RKNN", "single graph / FP16"),
+        panel(
+            Image.fromarray(error_color, mode="RGB"),
+            "Absolute difference",
+            "clipped at 2 px / binocular-valid pixels only",
+        ),
     ]
-    canvas = Image.new("RGB", (1800, 408), BG)
+    canvas = Image.new("RGB", (1200, 758), BG)
     for index, item in enumerate(panels):
-        canvas.paste(item, (index * 600, 4))
+        canvas.paste(item, ((index % 2) * 600, 4 + (index // 2) * 352))
     draw = ImageDraw.Draw(canvas)
-    draw.text((16, 365), "Fast-FoundationStereo · real rectified pair · 192x384 model", font=font(18, True), fill=TEXT)
-    draw.text((16, 388), "All three RK3588 NPU cores · full-hardware CPU frequencies", font=font(13), fill=ACCENT)
+    draw.text(
+        (16, 704),
+        "Fast-FoundationStereo on RK3588 · comparison with NVIDIA FP32",
+        font=font(18, True),
+        fill=TEXT,
+    )
+    draw.text(
+        (16, 728),
+        f"Binocular-valid pixels: {valid.sum():,}   MAE: {error[valid].mean():.3f} px   "
+        f"P95: {np.percentile(error[valid], 95):.3f} px",
+        font=font(13),
+        fill=ACCENT,
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(args.output, optimize=True)
 

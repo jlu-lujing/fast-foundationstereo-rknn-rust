@@ -15,42 +15,27 @@ Date: 2026-11-25
 The board's optional 80% CPU power cap was disabled for this validation. Results
 from the capped setting are not used as published performance.
 
-## Output agreement
-
-On both real rectified pairs and two Blender scenes, the Rust library and the
-matching C++ RKNN demo produced byte-identical FP32 outputs. Each output is
-exactly 192x384 values.
-
-```text
-pair 1: Rust == C++, SHA256 match
-pair 2: Rust == C++, SHA256 match
-Blender near scene 0000: Rust == C++, SHA256 match
-Blender far scene 0000: Rust == C++, SHA256 match
-```
-
-The Rust API tested both prepared FP16 inputs and RGB-to-FP16 packing. Prepared
-inputs isolate the model path; RGB8 timings represent a live camera handoff.
-
 ## Accuracy protocol
 
-The original image is first rotated clockwise and stereo-rectified with
-`EV202503002`. The crop contains only the intended measurement region. Metrics
-are calculated only where:
+For comparison with the NVIDIA project, the RKNN model consumes the exact
+`feature_inputs.npz` used to produce the project's FP32
+`disp_fp32_ref.npy`. Metrics are calculated only in the binocular effective
+computation region, where:
 
 - the projected point from the left camera remains inside the right camera;
 - a forward z-buffer visibility test accepts the point;
-- the local patch has nonzero texture;
-- SGBM/depth checks additionally require the device SGBM valid mask.
+- both outputs are finite.
 
 Flat borders and pixels visible in only one camera are excluded.
 
-| Pair | Binocular overlap | Textured overlap | SGBM-comparable | Disparity MAE | P95 | Depth MAE |
+| Comparison | Scored pixels | MAE | RMSE | P95 | P99 | Correlation |
 |---|---:|---:|---:|---:|---:|---:|
-| Pair 1 | 66,836 px | 61,108 px | 28,080 px | 0.582 px | 1.430 px | 0.313 mm |
-| Pair 2 | 65,905 px | 64,040 px | 51,466 px | 1.637 px | 2.477 px | 0.694 mm |
+| RKNN vs NVIDIA FP32 | 64,774 | **0.142 px** | 0.358 px | **0.414 px** | 0.895 px | **0.99918** |
 
-The device SGBM result is an independent comparison, not ground truth. Pair 2
-has a persistent approximately `-1.605 px` disparity bias against SGBM.
+Reference SHA256: `0c9d14c773f39ebcaac850c922d15a12dfc5b2109795e879a5203fd13c480479`.
+RKNN output SHA256: `311e5dc70ede0e9f50c53de56922de77f1a4b2494d640a6e4f38124b5beac454`.
+
+This verifies consistency with the original NVIDIA project output.
 
 ### Blender rendered ground truth
 
@@ -67,11 +52,6 @@ non-occluded pixels are counted.
 Flat-region MAE is `0.056 px` and `0.066 px`; edge-region MAE is `0.815 px` and
 `0.601 px`. The remaining error is concentrated at depth discontinuities.
 
-Against the previously recorded it2 results, the single graph improves the
-near-object suite from `0.198 px` to `0.179 px` MAE. On the far-background suite
-it measures `0.160 px` versus `0.154 px` for the former segmented pipeline, while
-removing every intermediate transfer and the CPU refinement stage.
-
 ## Full-frequency performance
 
 The published result uses full hardware OPPs: A55 `0-3` at 1.8 GHz, A76 `4-7` at
@@ -85,14 +65,6 @@ with 10 warmups and 50 frames per run. The values below are median-of-run-median
 
 The original 80% CPU limit was restored after testing. It is not used for any
 published throughput number.
-
-## Comparison with the previous export
-
-On the same textured binocular overlap, the current official-checkpoint graph
-matches the previous self-built export with MAE `0.071 px` / `0.104 px`, P95
-`0.195 px` / `0.300 px`, and correlation `0.99975` / `0.99940`. This validates
-the conversion path; it is not an absolute accuracy claim because the previous
-export is not ground truth.
 
 ## Test suite
 
