@@ -20,18 +20,20 @@ Measured on a NanoPC-T6-LTS / RK3588 using all hardware CPU and NPU frequencies:
 - Three independent runs, 10 warmups and 50 measured frames per run, no competing NPU workload
 - Input `192x384`, `valid_iters=2`, `max_disp=96`, FP16 RKNN
 
-| Scene | Prepared FP16 | Run range | P95 | FPS | RGB-to-FP16 | Run range |
-|---|---:|---:|---:|---:|---:|---:|
-| Real pair 1 | **206.489 ms** | 200.288-211.345 ms | 212.323 ms | **4.843** | **208.950 ms** | 202.323-211.212 ms |
-| Real pair 2 | **209.160 ms** | 206.955-212.328 ms | 212.737 ms | **4.781** | **212.607 ms** | 202.159-213.379 ms |
+| Scene | Prepared, owned | Prepared, reused | RGB8, owned | RGB8, reused |
+|---|---:|---:|---:|---:|
+| Real pair 1 | 208.522 ms | 207.745 ms | 206.473 ms | **202.927 ms** |
+| Real pair 2 | 207.018 ms | **204.247 ms** | 212.654 ms | 210.234 ms |
 
 The table reports the median of three independent run medians. The model call
 dominates runtime; input setup and output collection are below 0.5 ms when inputs
-are already packed as FP16 NHWC.
+are already packed as FP16 NHWC. The reused-output paths reached **4.928 FPS**
+and **4.757 FPS** respectively. Binding work to all eight CPUs was slower and
+much less stable than binding to the A76 cluster `4-7`.
 
-For sustained low-power operation, the test board can apply an 80% CPU-frequency
-cap at boot. That cap must be removed before comparing these numbers. The
-measurements above use the hardware maximum OPPs, not that power-limited mode.
+The validation board's `rk3588-cpu-cap.service` is disabled. A55 runs at 1.8 GHz
+and A76 at 2.256 GHz while these measurements are taken. The CPU limit has not
+been re-enabled after testing.
 
 ## Comparison with NVIDIA upstream
 

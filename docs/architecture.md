@@ -42,18 +42,18 @@ Full-hardware configuration on NanoPC-T6-LTS:
 | RKNN Runtime | 2.5.1 |
 | Model | `192x384`, `valid_iters=2`, `max_disp=96`, FP16 |
 
-| Scene | Prepared FP16 median | Run range | P95 | FPS | RGB8 median |
-|---|---:|---:|---:|---:|---:|
-| Pair 1 | 206.489 ms | 200.288-211.345 ms | 212.323 ms | 4.843 | 208.950 ms |
-| Pair 2 | 209.160 ms | 206.955-212.328 ms | 212.737 ms | 4.781 | 212.607 ms |
+| Scene | Prepared owned | Prepared reused | RGB8 owned | RGB8 reused |
+|---|---:|---:|---:|---:|
+| Pair 1 | 208.522 ms | 207.745 ms | 206.473 ms | 202.927 ms |
+| Pair 2 | 207.018 ms | 204.247 ms | 212.654 ms | 210.234 ms |
 
 The table reports the median of three independent run medians, each using 10
 warmups and 50 measured frames.
 
-The optimized output-reuse paths were also checked in three 30-frame A/B runs.
-Their gain is small relative to NPU and thermal run-to-run variation, but they
-remove a 288 KiB output allocation/copy per frame and reduce RGB8 conversion
-work. The NPU graph remains the dominant cost.
+The optimized output-reuse paths were checked in the same three full-frequency
+runs. They remove a 288 KiB output allocation/copy per frame and reduce RGB8
+conversion work, but the NPU graph remains the dominant cost. CPU affinity `0-7`
+was slower and less stable than A76 affinity `4-7`.
 
 ## Further speed work
 

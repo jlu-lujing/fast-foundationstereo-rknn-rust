@@ -63,8 +63,8 @@ with 10 warmups and 50 frames per run. The values below are median-of-run-median
 | Real pair 1 | **206.489 ms** | 200.288-211.345 ms | **4.843** | **208.950 ms** | 202.323-211.212 ms |
 | Real pair 2 | **209.160 ms** | 206.955-212.328 ms | **4.781** | **212.607 ms** | 202.159-213.379 ms |
 
-The original 80% CPU limit was restored after testing. It is not used for any
-published throughput number.
+The `rk3588-cpu-cap.service` 80% limit has been disabled and was not re-enabled
+after testing. The published configuration is full hardware frequency.
 
 ## Test suite
 
