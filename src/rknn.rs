@@ -236,6 +236,7 @@ impl RknnModel {
     pub fn load_with_options(path: impl AsRef<Path>, options: RknnOptions) -> Result<Self> {
         let model_path = path.as_ref();
         let model_data = std::fs::read(model_path).map_err(|error| Error::io(model_path, error))?;
+        validate_model_bytes(model_path, &model_data)?;
         let library_path = resolve_library(options.library_path.as_deref())?;
         let library = Arc::new(RknnLibrary::open(&library_path)?);
         let mut context: RknnContext = 0;
@@ -473,5 +474,40 @@ fn check_call(code: i32, operation: &'static str) -> Result<()> {
         Ok(())
     } else {
         Err(Error::RknnCall { operation, code })
+    }
+}
+
+fn validate_model_bytes(path: &Path, data: &[u8]) -> Result<()> {
+    if data.len() < 16 {
+        return Err(Error::InvalidModel {
+            path: path.to_path_buf(),
+            message: format!("file is only {} bytes", data.len()),
+        });
+    }
+    if &data[..4] != b"RKNN" {
+        return Err(Error::InvalidModel {
+            path: path.to_path_buf(),
+            message: "missing RKNN magic header".into(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_empty_and_non_rknn_models_before_runtime_init() {
+        let path = Path::new("model.rknn");
+        assert!(matches!(
+            validate_model_bytes(path, &[]),
+            Err(Error::InvalidModel { .. })
+        ));
+        assert!(matches!(
+            validate_model_bytes(path, b"not an rknn model"),
+            Err(Error::InvalidModel { .. })
+        ));
+        assert!(validate_model_bytes(path, b"RKNN\0\0\0\0\0\0\0\0\0\0\0\0").is_ok());
     }
 }

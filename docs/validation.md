@@ -72,6 +72,7 @@ The repository tests cover:
 
 - NCHW RGB to contiguous NHWC FP16 packing;
 - RGB8 length validation;
+- empty and non-RKNN model files are rejected before calling the runtime;
 - tensor shape and element-count validation.
 
 The RKNN calls require hardware and are exercised by `examples/bench_stereo` and

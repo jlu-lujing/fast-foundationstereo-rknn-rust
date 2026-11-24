@@ -12,6 +12,9 @@ pub enum Error {
     #[error("RKNN runtime library was not found (tried {tried:?})")]
     RknnLibraryNotFound { tried: Vec<PathBuf> },
 
+    #[error("invalid RKNN model {path}: {message}")]
+    InvalidModel { path: PathBuf, message: String },
+
     #[error("failed to load RKNN symbol {symbol}: {message}")]
     RknnSymbol { symbol: String, message: String },
 
