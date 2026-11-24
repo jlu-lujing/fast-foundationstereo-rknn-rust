@@ -47,30 +47,6 @@ impl Tensor {
     pub fn name_or<'a>(&'a self, fallback: &'a str) -> &'a str {
         self.name.as_deref().unwrap_or(fallback)
     }
-
-    /// Convert this tensor to the byte order expected by rknnlite-style inputs.
-    ///
-    /// RKNN declares rank-4 tensors as NCHW but accepts NHWC-ordered bytes.
-    /// Rank-5 tensors are passed through unchanged.
-    pub fn to_rknn_input_f32(&self) -> Vec<f32> {
-        if self.rank() != 4 {
-            return self.data.clone();
-        }
-        let (n, c, h, w) = (self.shape[0], self.shape[1], self.shape[2], self.shape[3]);
-        let mut output = vec![0.0; self.data.len()];
-        for batch in 0..n {
-            for channel in 0..c {
-                for y in 0..h {
-                    for x in 0..w {
-                        let src = ((batch * c + channel) * h + y) * w + x;
-                        let dst = ((batch * h + y) * w + x) * c + channel;
-                        output[dst] = self.data[src];
-                    }
-                }
-            }
-        }
-        output
-    }
 }
 
 #[cfg(test)]
@@ -78,14 +54,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rank4_uses_nhwc_byte_order() {
-        let tensor = Tensor::new(vec![1, 2, 1, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-        assert_eq!(tensor.to_rknn_input_f32(), vec![1.0, 3.0, 2.0, 4.0]);
+    fn rejects_wrong_element_count() {
+        let error = Tensor::new(vec![1, 1, 2, 2], vec![1.0, 2.0, 3.0]).unwrap_err();
+        assert!(matches!(error, Error::TensorElementCount { .. }));
     }
 
     #[test]
-    fn rank5_passes_through() {
-        let tensor = Tensor::new(vec![1, 1, 2, 1, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-        assert_eq!(tensor.to_rknn_input_f32(), tensor.data);
+    fn exposes_shape_metadata() {
+        let tensor = Tensor::new(vec![1, 1, 2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        assert_eq!(tensor.numel(), 4);
+        assert_eq!(tensor.rank(), 4);
+        assert_eq!(tensor.name_or("disparity"), "disparity");
     }
 }

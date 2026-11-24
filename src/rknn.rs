@@ -17,7 +17,6 @@ type RknnContext = u64;
 const RKNN_QUERY_IN_OUT_NUM: u32 = 0;
 const RKNN_QUERY_INPUT_ATTR: u32 = 1;
 const RKNN_QUERY_OUTPUT_ATTR: u32 = 2;
-const RKNN_TENSOR_FLOAT32: u32 = 0;
 const RKNN_TENSOR_FLOAT16: u32 = 1;
 const RKNN_TENSOR_NHWC: u32 = 1;
 const RKNN_MAX_DIMS: usize = 16;
@@ -132,7 +131,7 @@ impl Default for RknnOptions {
     fn default() -> Self {
         Self {
             library_path: None,
-            core: NpuCore::Auto,
+            core: NpuCore::All,
         }
     }
 }
@@ -300,32 +299,10 @@ impl RknnModel {
         &self.output_info
     }
 
-    pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>> {
-        if inputs.len() != self.input_info.len() {
-            return Err(Error::InputCount {
-                expected: self.input_info.len(),
-                actual: inputs.len(),
-            });
-        }
-
-        let packed: Vec<Vec<f32>> = inputs.iter().map(Tensor::to_rknn_input_f32).collect();
-        let mut raw_inputs = Vec::with_capacity(inputs.len());
-        for (index, buffer) in packed.iter().enumerate() {
-            raw_inputs.push(RknnInput {
-                index: index as u32,
-                buf: buffer.as_ptr().cast_mut().cast(),
-                size: std::mem::size_of_val(buffer.as_slice()) as u32,
-                pass_through: 0,
-                type_: RKNN_TENSOR_FLOAT32,
-                format: RKNN_TENSOR_NHWC,
-            });
-        }
-        self.execute(raw_inputs)
-    }
-
-    /// Run a model whose two or more NHWC inputs are already FP16 and use
-    /// pass-through mode. This is the zero-conversion path expected by the
-    /// single-graph Fast-FoundationStereo models exported for RK3588.
+    /// Run a model whose inputs are already contiguous FP16 NHWC tensors.
+    ///
+    /// Pass-through mode avoids RKNN doing a second FP32-to-FP16 conversion for
+    /// every frame.
     pub fn run_nhwc_f16(&mut self, inputs: &[&[u16]]) -> Result<Vec<Tensor>> {
         if inputs.len() != self.input_attrs.len() {
             return Err(Error::InputCount {

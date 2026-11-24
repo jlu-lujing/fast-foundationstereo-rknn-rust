@@ -1,6 +1,6 @@
 [package]
 name = "foundationstereo-rknn"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT"
@@ -12,37 +12,17 @@ keywords = ["stereo", "rknn", "rk3588", "npu", "depth-estimation"]
 categories = ["computer-vision", "hardware-support", "science"]
 
 [features]
-default = ["ort"]
-ort = ["dep:ort"]
 serde = ["dep:serde"]
 
 [dependencies]
 half = "2"
 libloading = "0.9"
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-19"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 
 [dev-dependencies]
-approx = "0.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-tempfile = "3"
-
-[build-dependencies]
-cc = "1"
 
 [package.metadata.docs.rs]
-features = ["ort", "serde"]
-
-[[example]]
-name = "bench_pair"
-required-features = ["ort"]
-
-[[example]]
-name = "dump_stages"
-required-features = ["ort"]
-
-[[example]]
-name = "run_pair"
-required-features = ["ort"]
+features = ["serde"]
 

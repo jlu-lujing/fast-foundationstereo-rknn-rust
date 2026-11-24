@@ -3,70 +3,67 @@
 [![CI](https://github.com/jlu-lujing/fast-foundationstereo-rknn-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/jlu-lujing/fast-foundationstereo-rknn-rust/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Rust inference library for [Fast-FoundationStereo](https://github.com/NVlabs/Fast-FoundationStereo)
+High-performance Rust inference for [Fast-FoundationStereo](https://github.com/NVlabs/Fast-FoundationStereo)
 on Rockchip RK3588.
 
-The library wraps Rockchip's RKNN C API directly and exposes a safe,
-tensor-oriented Rust API. It supports both the segmented graph path and the
-faster single-RKNN path:
+The crate runs the complete two-iteration stereo network as one fixed-shape RKNN
+graph. It does not require ONNX Runtime, a CPU refinement stage, or intermediate
+tensor transfers.
 
-- `FoundationStereo`: feature encoder and segmented cost aggregation on the NPU,
-  group-wise correlation volume in Rust, and Resize/refinement in ONNX Runtime.
-- `SingleGraphStereo`: the whole network in one `192x384` RKNN graph, with two
-  FP16 NHWC inputs passed directly to all three NPU cores and one FP32
-  disparity output.
+## Performance
 
-## Status
+Measured on a NanoPC-T6-LTS / RK3588 using all hardware CPU and NPU frequencies:
 
-- RKNN runtime loaded dynamically; no Rockchip SDK required at compile time.
-- Multiple float32 inputs and outputs, including rank-5 tensors.
-- Direct FP16 NHWC pass-through for low-overhead single-graph inference.
-- Per-model NPU core selection for `feature`, `pre-resize`, and `post-resize`.
-- Group-wise correlation volume through a vendored AArch64 SIMD/NEON kernel,
-  with a pure Rust scalar reference used by tests.
-- ONNX Runtime dynamic loading through the `ort` crate.
-- Synchronous pipeline API and a runnable pair-inspection example.
-- Single-graph stereo backend and benchmark example.
-- Models and weights are not redistributed.
+- CPU `4-7` at 2.256 GHz, CPU `0-3` at 1.8 GHz
+- NPU at 1.0 GHz with all three cores enabled (`mask=7`)
+- RKNN Runtime 2.5.1, matching the converted model
+- Three independent runs, 10 warmups and 50 measured frames per run, no competing NPU workload
+- Input `192x384`, `valid_iters=2`, `max_disp=96`, FP16 RKNN
 
-## Tested platform
+| Scene | Prepared FP16 | Run range | P95 | FPS | RGB-to-FP16 | Run range |
+|---|---:|---:|---:|---:|---:|---:|
+| Real pair 1 | **206.489 ms** | 200.288-211.345 ms | 212.323 ms | **4.843** | **208.950 ms** | 202.323-211.212 ms |
+| Real pair 2 | **209.160 ms** | 206.955-212.328 ms | 212.737 ms | **4.781** | **212.607 ms** | 202.159-213.379 ms |
 
-- NanoPC-T6-LTS / RK3588
-- `librknnrt` 2.3.2 for segmented graphs; 2.5.1 for the custom-op single graph
-- ONNX Runtime 1.19.2
-- `192x384_it2_d96` single graph and `192x384_it2_d96` / `it4` segmented artifacts
+The table reports the median of three independent run medians. The Rust and C++
+frontends produce byte-identical outputs. The model call dominates runtime; input
+setup and output collection are below 0.5 ms when inputs are already packed as
+FP16 NHWC.
 
-The Python reference pipeline reaches 695 ms/frame with the 2-iteration profile
-under the board's shipped CPU limit through cross-frame overlap. The current Rust
-API is synchronous and measured **1423.7 ms/frame**; a threaded streaming
-scheduler is the next milestone.
-
-That number applies to the segmented Rust path. A compatible whole-network RKNN
-graph removes the repeated RKNN launches and the CPU/ONNX Runtime stage. On two
-real rectified pairs, the `192x384`, 2-iteration, `max_disp=96` single graph
-measures **227.5-234.7 ms/frame (4.26-4.40 FPS)** with prepared FP16 inputs and
-**235.3-239.9 ms/frame** including RGB-to-FP16 packing. The C++ demo using the
-same graph and runtime measures 236.0-236.4 ms, so the Rust wrapper has no
-measurable inference-path overhead.
-
-The public K3588 exporter reports 197.0 ms / 5.08 FPS for this configuration.
-That figure was not reproduced here: the exporter does not distribute its exact
-model artifact, and its own C++ demo against a locally exported official
-checkpoint measures 236 ms. Treat 227-236 ms (4.2-4.4 FPS) as the current
-independently verified result.
-
-Validation against the Python segmented pipeline on an original exported stereo
-pair produced difference MAE `8.34e-6 px`, P99 `3.05e-5 px`, max
-`2.40e-4 px`, and correlation `0.9999999999992`.
+For sustained low-power operation, the test board can apply an 80% CPU-frequency
+cap at boot. That cap must be removed before comparing these numbers. The
+measurements above use the hardware maximum OPPs, not that power-limited mode.
 
 ## Result comparison
 
-![Original Fast-FoundationStereo input: original FP32 pipeline vs Rust RK3588](assets/readme_comparison.png)
+![Real rectified left image and RK3588 disparity](assets/readme_comparison.png)
 
-This uses a real stereo pair exported by the original Fast-FoundationStereo
-pipeline, not a Blender-generated scene. The difference view is restricted to
-pixels visible in both cameras. Against the original FP32 result, Rust has
-overlap MAE `0.00772 px` and P99 `0.0451 px` at `192x384`.
+This uses an original rectified stereo pair and the current single-graph RK3588
+output. Accuracy is evaluated only on pixels visible in both cameras.
+
+Against the device SGBM reference, disparity MAE is `0.582 px` and `1.637 px` on
+the two real validation pairs, with depth MAE `0.313 mm` and `0.694 mm`. SGBM is
+an independent reference, not ground truth.
+
+The Rust API was also rerun on 32 Blender pairs with rendered disparity truth:
+
+| Blender suite | Scenes | Scored pixels | MAE | P95 | Error > 2 px |
+|---|---:|---:|---:|---:|---:|
+| Near-object | 16 | 747,333 | **0.179 px** | **0.489 px** | 0.860% |
+| Far textured background | 16 | 1,061,605 | **0.160 px** | **0.501 px** | 0.633% |
+
+Full methodology and per-scene results are in
+[`docs/validation.md`](docs/validation.md).
+
+## Requirements
+
+- Rockchip RK3588 and a compatible `librknnrt.so`
+- RKNN Runtime 2.5.1 for the custom-op stereo graph used in these measurements
+- A compatible fixed-shape stereo RKNN model, including the matching custom op
+- A C compiler is not required by this crate
+
+The model and NVIDIA weights are not redistributed. See
+[`NOTICE`](NOTICE) before deploying or publishing derived artifacts.
 
 ## Build
 
@@ -75,16 +72,6 @@ cargo build --release
 cargo test
 ```
 
-For a deployment that uses only `SingleGraphStereo`, disable the optional ONNX
-Runtime backend and its dependency tree:
-
-```bash
-cargo build --release --no-default-features --example bench_single_graph
-```
-
-A C compiler is required because the correlation kernel is built and linked by
-`build.rs`.
-
 The RKNN runtime is resolved in this order:
 
 1. `RknnOptions::library_path`
@@ -92,106 +79,103 @@ The RKNN runtime is resolved in this order:
 3. `/usr/lib/librknnrt.so`
 4. system loader lookup of `librknnrt.so`
 
-ONNX Runtime is supplied by the caller:
+## Quick start
+
+Both images must be rectified. The benchmark example resizes them to the model
+input dimensions. Pass the matching RKNN runtime when the system library does
+not support the model's custom operator.
 
 ```bash
-export ORT_DYLIB_PATH=/path/to/libonnxruntime.so
-```
-
-## Artifacts
-
-The pipeline expects:
-
-```text
-feature_single.rknn
-segment_pre_resize.rknn
-segment_post_resize_full.rknn
-stage_resize_only.onnx
-segment_refine.onnx
-```
-
-If `segment_refine_native_ffs.onnx` or `segment_refine_ffs.onnx` is present, the
-library selects it automatically. Register the corresponding FFS operator library
-with `--ffs-lib`.
-
-Build them with the Python toolkit repository:
-
-<https://github.com/jlu-lujing/fast-foundationstereo-rknn>
-
-## Example
-
-For a compatible whole-network model, prepare a rectified `384x192` RGB pair and
-run:
-
-```bash
-cargo run --release --example bench_single_graph -- \
-  --model /path/to/stereo.rknn \
+cargo run --release --example bench_stereo -- \
+  --model /path/to/stereo_192x384_it2_d96.rknn \
   --rknn-lib /path/to/librknnrt.so \
   --left left.png \
   --right right.png \
-  --warmup 2 \
-  --frames 30
+  --warmup 5 \
+  --frames 50 \
+  --output disparity.f32
 ```
 
-The benchmark reports both `model` and `rgb8` timings. `model` reuses prepared
-`F16Image` inputs; `rgb8` includes the per-frame RGB-to-FP16 packing that a live
-camera pipeline needs.
-
-For the segmented path:
+Inspect the model's declared inputs and outputs with:
 
 ```bash
-cargo run --release --example run_pair -- \
-  --artifacts /path/to/artifacts \
-  --ort /path/to/libonnxruntime.so \
-  --ffs-lib /path/to/libffsops.so \
-  --left left.png \
-  --right right.png \
-  --output disparity.png
+export RKNN_LIBRARY=/path/to/librknnrt.so
+cargo run --release --example inspect_model -- /path/to/stereo.rknn
 ```
 
-The two images must be rectified and have the model's exported spatial size.
+Run prepared NHWC FP16 inputs without any image resizing or RGB conversion with:
 
-## API sketch
-
-```rust,no_run
-use foundationstereo_rknn::{FoundationStereo, PipelineOptions};
-
-let options = PipelineOptions::new("/path/to/artifacts");
-let mut stereo = FoundationStereo::load(options)?;
-let disparity = stereo.infer(&left_nchw, &right_nchw)?;
-assert_eq!(disparity.shape, vec![1, 1, 192, 384]);
-# Ok::<(), foundationstereo_rknn::Error>(())
+```bash
+cargo run --release --example run_prepared -- \
+  --model /path/to/stereo_192x384_it2_d96.rknn \
+  --rknn-lib /path/to/librknnrt.so \
+  --left left.nhwc.f16 \
+  --right right.nhwc.f16 \
+  --output disparity.f32
 ```
 
-Single-graph inference does not require ONNX Runtime:
+## API
 
 ```rust,no_run
-use foundationstereo_rknn::{NpuCore, RknnOptions, SingleGraphStereo};
+use foundationstereo_rknn::{FoundationStereo, RknnOptions};
 
 let options = RknnOptions {
-    library_path: Some("/usr/lib/librknnrt.so".into()),
-    core: NpuCore::All,
+    library_path: Some("/path/to/librknnrt.so".into()),
+    ..RknnOptions::default()
 };
-let mut stereo = SingleGraphStereo::load("/path/to/stereo.rknn", options)?;
-let disparity = stereo.infer_rgb8(&left_rgb_384x192, &right_rgb_384x192)?;
-assert_eq!(disparity.shape, vec![1, 1, 192, 384]);
+let mut stereo = FoundationStereo::load_with_options("/path/to/stereo.rknn", options)?;
+let (width, height) = stereo.input_size();
+
+// `left_rgb8` and `right_rgb8` are contiguous HWC RGB bytes at model size.
+let disparity = stereo.infer_rgb8(&left_rgb8, &right_rgb8)?;
+assert_eq!(disparity.shape, vec![1, 1, height, width]);
 # Ok::<(), foundationstereo_rknn::Error>(())
 ```
 
-## Current limits
+For zero per-frame packing overhead, keep two `F16Image` buffers and call
+`infer(&left, &right)`. `infer_nchw` is available for callers whose camera
+pipeline already produces `[1,3,H,W]` float tensors.
 
-- Synchronous invocation only; callers must schedule adjacent frames themselves.
-- `SingleGraphStereo` expects the fixed single-RKNN layout and two FP16 NHWC RGB
-  inputs. Its model is not redistributed.
-- `segment_refine_ffs.onnx` requires the compatible FFS custom-op library and
-  ONNX Runtime 1.19.x.
-- The C correlation kernel is optimized for AArch64; other hosts use the Rust
-  scalar reference.
-- No pretrained weights or `.rknn` files are distributed.
+## Model contract
+
+```text
+left:   FP16 NHWC [1,H,W,3], RGB 0..255, pass-through
+right:  FP16 NHWC [1,H,W,3], RGB 0..255, pass-through
+output: FP32 disparity, one value per input pixel
+```
+
+`FoundationStereo` validates that both inputs have the same `[1,H,W,3]` shape,
+that the model has exactly two inputs and one output, and that the output has
+`H*W` values. The returned tensor is normalized to `[1,1,H,W]`.
+
+## Hardware tuning
+
+Use all three NPU cores (`RknnOptions::default()`) and a performance CPU governor.
+On NanoPC-T6-LTS, the full-frequency setup used for the published benchmark is:
+
+```bash
+echo performance | sudo tee /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
+echo performance | sudo tee /sys/devices/system/cpu/cpufreq/policy4/scaling_governor
+echo performance | sudo tee /sys/devices/system/cpu/cpufreq/policy6/scaling_governor
+echo 1800000 | sudo tee /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
+echo 2256000 | sudo tee /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq
+echo 2256000 | sudo tee /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq
+```
+
+If `rk3588-cpu-cap.service` is enabled, disable it too or its 80% limit will be
+reapplied at boot. Exact OPPs vary by board and device tree.
+
+See [`docs/architecture.md`](docs/architecture.md) for the execution layout and
+[`docs/validation.md`](docs/validation.md) for the accuracy protocol.
+
+## Scope
+
+This release intentionally supports only the fast single-RKNN architecture. The
+previous segmented ONNX/CPU pipeline is removed, and there is no fallback path.
+Breaking API changes are expected while the crate remains below version 1.0.
 
 ## License
 
-This library is MIT licensed. NVIDIA's upstream model weights and derivatives
-remain subject to their own research/non-commercial terms. No model weights are
-included in this repository.
-
+The Rust library is MIT licensed. Fast-FoundationStereo and NVIDIA model weights
+remain subject to NVIDIA's upstream research/non-commercial terms. No model
+weights or `.rknn` artifacts are included in this repository.

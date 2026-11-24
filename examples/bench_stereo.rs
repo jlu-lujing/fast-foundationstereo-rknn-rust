@@ -4,22 +4,22 @@ use std::{
     time::Instant,
 };
 
-use foundationstereo_rknn::{F16Image, NpuCore, RknnOptions, SingleGraphStereo, Tensor};
+use foundationstereo_rknn::{F16Image, FoundationStereo, RknnOptions, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
     let options = RknnOptions {
         library_path: args.get("rknn-lib").map(PathBuf::from),
-        core: NpuCore::All,
+        ..RknnOptions::default()
     };
-    let mut stereo = SingleGraphStereo::load(required(&args, "model")?, options)?;
+    let mut stereo = FoundationStereo::load_with_options(required(&args, "model")?, options)?;
     let (width, height) = stereo.input_size();
     let left = load_resized_rgb(Path::new(required(&args, "left")?), width, height)?;
     let right = load_resized_rgb(Path::new(required(&args, "right")?), width, height)?;
     let prepared_left = F16Image::from_rgb8(height, width, &left)?;
     let prepared_right = F16Image::from_rgb8(height, width, &right)?;
-    let warmup = parse_usize(&args, "warmup", 2)?;
-    let frames = parse_usize(&args, "frames", 10)?;
+    let warmup = parse_usize(&args, "warmup", 5)?;
+    let frames = parse_usize(&args, "frames", 50)?;
     if frames == 0 {
         return Err("--frames must be positive".into());
     }

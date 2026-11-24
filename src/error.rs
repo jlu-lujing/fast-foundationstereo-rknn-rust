@@ -32,17 +32,8 @@ pub enum Error {
     #[error("model input mismatch: expected {expected} tensors, received {actual}")]
     InputCount { expected: usize, actual: usize },
 
-    #[error("model output {name} is missing")]
-    MissingOutput { name: String },
-
     #[error("unexpected model output layout: {0}")]
     UnexpectedLayout(String),
-
-    #[error("ONNX Runtime backend is disabled; enable the `ort` feature")]
-    OrtDisabled,
-
-    #[error("ONNX Runtime error: {0}")]
-    Ort(String),
 }
 
 impl Error {
