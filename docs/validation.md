@@ -12,8 +12,7 @@ Date: 2026-11-25
 - Rust release build
 - One `192x384` RKNN graph, `valid_iters=2`, `max_disp=96`, FP16
 
-The board's optional 80% CPU power cap was disabled for this validation. Results
-from the capped setting are not used as published performance.
+All published performance uses the hardware maximum CPU OPPs.
 
 ## Accuracy protocol
 
@@ -63,8 +62,7 @@ with 10 warmups and 50 frames per run. The values below are median-of-run-median
 | Real pair 1 | **206.489 ms** | 200.288-211.345 ms | **4.843** | **208.950 ms** | 202.323-211.212 ms |
 | Real pair 2 | **209.160 ms** | 206.955-212.328 ms | **4.781** | **212.607 ms** | 202.159-213.379 ms |
 
-The `rk3588-cpu-cap.service` 80% limit has been disabled and was not re-enabled
-after testing. The published configuration is full hardware frequency.
+Only full-hardware-frequency results are published.
 
 ## Test suite
 

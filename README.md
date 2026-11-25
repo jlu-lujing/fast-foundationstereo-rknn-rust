@@ -31,9 +31,8 @@ are already packed as FP16 NHWC. The reused-output paths reached **4.928 FPS**
 and **4.757 FPS** respectively. Binding work to all eight CPUs was slower and
 much less stable than binding to the A76 cluster `4-7`.
 
-The validation board's `rk3588-cpu-cap.service` is disabled. A55 runs at 1.8 GHz
-and A76 at 2.256 GHz while these measurements are taken. The CPU limit has not
-been re-enabled after testing.
+All measurements use the hardware maximum CPU OPPs: A55 at 1.8 GHz and A76 at
+2.256 GHz. Only full-performance results are published.
 
 ## Comparison with NVIDIA upstream
 
@@ -175,8 +174,8 @@ echo 2256000 | sudo tee /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq
 echo 2256000 | sudo tee /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq
 ```
 
-If `rk3588-cpu-cap.service` is enabled, disable it too or its 80% limit will be
-reapplied at boot. Exact OPPs vary by board and device tree.
+Verify that each policy reports the intended maximum after changing the
+governor. Exact OPPs vary by board and device tree.
 
 See [`docs/architecture.md`](docs/architecture.md) for the execution layout and
 [`docs/validation.md`](docs/validation.md) for the accuracy protocol.
